@@ -139,13 +139,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         // First check if we have a key stored
-        const storedKey = await getStoredOpenAIKey();
+        const storedKey = await getStoredOpenAIKey() || message.testKey;
         if (!storedKey) {
           sendResponse({ openaiConfigured: false });
           return;
         }
 
         // Validate the key by making a test request
+        console.log('OpenAI API Key:', storedKey);
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -472,15 +473,6 @@ function getColorFilter(color) {
   return colorMap[color.toLowerCase()] || '';
 }
 
-// Function to check if API is configured
-async function checkApiConfiguration() {
-  return new Promise((resolve) => {
-    chrome.storage.sync.get(['rainforestApiKey'], function(data) {
-      resolve(!!data.rainforestApiKey);
-    });
-  });
-}
-
 // Check if we're within rate limits
 function checkRateLimit() {
   const now = Date.now();
@@ -577,7 +569,14 @@ async function handleProductSearch(query, filters = {}, popupTab = null) {
       console.log('Error cleaning up tab:', e);
     }
 
-    // Return results and search URL
+    // Store results and return them
+    await chrome.storage.local.set({ 
+      lastSearchResults: {
+        products: results.slice(0, maxResults),
+        searchUrl: searchUrl
+      }
+    });
+    
     return {
       products: results.slice(0, maxResults),
       searchUrl: searchUrl

@@ -3,36 +3,58 @@ import Header from './components/Header/Header';
 import ChatContainer from './components/ChatContainer/ChatContainer';
 import InputContainer from './components/InputContainer/InputContainer';
 import './App.css';
+import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
+import { jwtDecode } from 'jwt-decode';
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isApiConfigured, setIsApiConfigured] = useState(false);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
-    checkApiConfiguration();
-    loadChatHistory();
-    const checkStoredResults = async () => {
-      try {
-        const { lastSearchResults } = await chrome.storage.local.get('lastSearchResults');
-        if (lastSearchResults) {
-          console.log('Found stored search results:', lastSearchResults);
-          const assistantMessage = {
-            type: 'assistant',
-            text: 'Here are the products from your last search:',
-            products: lastSearchResults.products,
-            timestamp: Date.now()
-          };
-          setMessages(prev => [...prev, assistantMessage]);
-          // Clear stored results
-          await chrome.storage.local.remove('lastSearchResults');
+    // Only proceed with chat initialization if user is logged in
+    if (user) {
+      checkApiConfiguration();
+      loadChatHistory();
+      const checkStoredResults = async () => {
+        try {
+          const { lastSearchResults } = await chrome.storage.local.get('lastSearchResults');
+          let assistantMessage;
+          if (lastSearchResults) {
+            console.log('Found stored search results:', lastSearchResults);
+            assistantMessage = {
+              type: 'assistant',
+              text: 'Here are the products from your last search:',
+              products: lastSearchResults.products,
+              timestamp: Date.now()
+            };
+            await chrome.storage.local.remove('lastSearchResults');
+            setMessages(prev => [...prev, assistantMessage]);
+          } else {
+            assistantMessage = {
+              type: 'assistant',
+              text: 'Hello, I am Anna AI, how can I help you today?',
+              timestamp: Date.now()
+            };
+            setMessages(prev => [...prev, assistantMessage]);
+          }
+        } catch (error) {
+          console.error('Error checking stored results:', error);
         }
-      } catch (error) {
-        console.error('Error checking stored results:', error);
-      }
-    };
+      };
 
-    checkStoredResults();
+      checkStoredResults();
+    }
+  }, [user]); // Add user as dependency
+
+  useEffect(() => {
+    // Check for existing Google auth session on mount
+    const token = localStorage.getItem('google_token');
+    if (token) {
+      const userData = jwtDecode(token);
+      setUser(userData);
+    }
   }, []);
 
   useEffect(() => {
@@ -52,7 +74,7 @@ function App() {
           text: 'Please configure your OpenAI API key in the settings to start using Anna AI.',
           timestamp: Date.now()
         }]);
-      }
+      } 
     } catch (error) {
       console.error('Error checking API configuration:', error);
     }
@@ -162,15 +184,66 @@ function App() {
     }
   };
 
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      const details = jwtDecode(credentialResponse.credential);
+      
+      // Store user info
+      const userData = {
+        id: details.sub,
+        name: details.name,
+        email: details.email,
+        picture: details.picture
+      };
+      
+      // Store both the token and user data
+      localStorage.setItem('google_token', credentialResponse.credential);
+      localStorage.setItem('user_data', JSON.stringify(userData));
+      
+      setUser(userData);
+    } catch (error) {
+      console.error('Google login error:', error);
+    }
+  };
+
+  const handleGoogleError = () => {
+    console.error('Google login failed');
+    // Optionally show error message to user
+    setMessages(prev => [...prev, {
+      type: 'error',
+      text: 'Google login failed. Please try again.',
+      timestamp: Date.now()
+    }]);
+  };
+
   return (
-    <div className="app">
-      <Header onSettingsClick={handleSettingsClick} />
-      <ChatContainer messages={messages} isTyping={isTyping} />
-      <InputContainer 
-        onSendMessage={handleSendMessage}
-        disabled={!isApiConfigured || isTyping}
-      />
-    </div>
+    <GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID}>
+      <div className="app">
+        {!user ? (
+          <div className="login-container">
+            <h2>Welcome to Anna AI</h2>
+            <p>Please sign in to continue</p>
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={handleGoogleError}
+              useOneTap
+              theme="filled_blue"
+              size="large"
+              shape="pill"
+            />
+          </div>
+        ) : (
+          <>
+            <Header onSettingsClick={handleSettingsClick} user={user} />
+            <ChatContainer messages={messages} isTyping={isTyping} />
+            <InputContainer 
+              onSendMessage={handleSendMessage}
+              disabled={!isApiConfigured || isTyping}
+            />
+          </>
+        )}
+      </div>
+    </GoogleOAuthProvider>
   );
 }
 

@@ -45,6 +45,10 @@ const Options = () => {
         requestDelay: settings.requestDelay
       });
       showStatus('Settings saved successfully!', 'success');
+      chrome.tabs.create({
+        url: 'https://www.amazon.com',
+        active: true // This makes the new tab active/focused
+      });
     } catch (error) {
       showStatus('Error saving settings: ' + error.message, 'error');
     }
@@ -53,7 +57,8 @@ const Options = () => {
   const testConnection = async () => {
     try {
       const response = await chrome.runtime.sendMessage({
-        action: 'checkApiConfig'
+        action: 'checkApiConfig',
+        testKey: settings.openaiKey
       });
 
       if (response.openaiConfigured) {
