@@ -1,6 +1,3 @@
-// Import the Amazon Product API SDK (we'll simulate this since extensions can't directly use npm packages)
-// In a real implementation, you'd need to bundle these dependencies
-
 // Constants for rate limiting and anti-detection
 const RATE_LIMIT = {
   MAX_REQUESTS_PER_HOUR: 100,
@@ -11,7 +8,7 @@ const RATE_LIMIT = {
 const OPENAI_CONFIG = {
   MODEL: 'gpt-3.5-turbo',
   MAX_TOKENS: 1000,
-  TEMPERATURE: 0.2 // Lower temperature for more consistent structured output
+  TEMPERATURE: 0.2
 };
 
 // Constants for popup management
@@ -63,7 +60,6 @@ async function testOpenAIKey(apiKey) {
 // Function to store the OpenAI API key
 async function storeOpenAIKey(apiKey) {
   try {
-    // Basic format validation
     if (!apiKey || !apiKey.startsWith('sk-') || apiKey.length < 40) {
       throw new Error('Invalid OpenAI API key format');
     }
@@ -71,12 +67,10 @@ async function storeOpenAIKey(apiKey) {
     // Test the API key with a real request
     await testOpenAIKey(apiKey);
 
-    // If we get here, the key is valid
     await chrome.storage.local.set({ 
       'openai_api_key': apiKey 
     });
     
-    // Update the in-memory key
     openaiApiKey = apiKey;
     
     return true;
@@ -850,8 +844,8 @@ async function generateOptimizedQuery(userQuery) {
       body: JSON.stringify({
         model: OPENAI_CONFIG.MODEL,
         messages: prompt.messages,
-        max_tokens: 300, // Increased to handle more detailed responses
-        temperature: 0.7
+        max_tokens: OPENAI_CONFIG.MAX_TOKENS, // Increased to handle more detailed responses
+        temperature: OPENAI_CONFIG.TEMPERATURE
       })
     });
 

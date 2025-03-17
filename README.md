@@ -4,30 +4,34 @@ Anna AI is a Chrome extension that enhances your Amazon shopping experience with
 
 ## Features
 
-- 🤖 AI-powered shopping assistant
+- 🤖 AI-powered Amazon shopping assistant
 - 💬 Natural conversation interface
-- 🔍 Product analysis and comparison
 - 📊 Price and feature evaluation
-- 🎯 Personalized recommendations
-- 🛍️ Seamless Amazon integration
+- 🎯 Personalized product recommendations
+- 🔐 Secure Google authentication
+- ⚡ Real-time product analysis
+- 💾 Persistent chat history
+- 🎨 Clean, modern UI
 
-## Installation
+## Prerequisites
 
-### For Users
-1. Download from the Chrome Web Store (link coming soon)
-2. Click "Add to Chrome"
-3. Configure your OpenAI API key in the extension settings
-4. Start shopping on Amazon with AI assistance!
-
-### For Developers
-
-#### Prerequisites
 - Node.js (v14 or higher)
 - npm or yarn
 - Chrome browser
-- OpenAI API key
+- Google OAuth Client ID
+- OpenAI API key (user provides their own)
 
-#### Setup
+## Tech Stack
+
+- React 18
+- Vite
+- Chrome Extensions Manifest V3
+- Google OAuth 2.0
+- OpenAI API
+- JWT for authentication
+
+## Installation
+
 1. Clone the repository
 ```bash
 git clone https://github.com/yourusername/anna-ai.git
@@ -39,10 +43,20 @@ cd anna-ai
 npm install
 ```
 
-3. Create a `.env` file in the root directory
-```bash
-VITE_OPENAI_API_KEY=your_api_key_here
-```
+3. Set up environment variables
+- Copy `.env.example` to `.env`:
+  ```bash
+  cp .env.example .env
+  ```
+- Edit `.env` and add your Google Client ID:
+  ```bash
+  VITE_GOOGLE_CLIENT_ID=your_google_client_id_here
+  ```
+  - Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
+  - Enable the Google OAuth2 API
+  - Create credentials (OAuth 2.0 Client ID)
+  - Set authorized JavaScript origins to include your development URLs
+  - Add chrome-extension://YOUR_EXTENSION_ID as an authorized origin
 
 4. Build the extension
 ```bash
@@ -51,93 +65,78 @@ npm run build
 
 5. Load the extension in Chrome
 - Open Chrome and go to `chrome://extensions/`
-- Enable "Developer mode"
-- Click "Load unpacked"
+- Enable "Developer mode" in the top right
+- Click "Load unpacked" in the top left
 - Select the `dist` folder from your project
-
-## Architecture
-
-### Tech Stack
-- React + Vite for the frontend
-- Chrome Extensions Manifest V3
-- OpenAI API for AI capabilities
-- Local storage for settings and chat history
-
-## Project Structure
-### Key Components
-
-1. **Background Service Worker** (`background.js`)
-   - Handles API communications
-   - Manages extension state
-   - Processes messages between components
-
-2. **Content Script** (`content.js`)
-   - Injects the AI assistant interface
-   - Handles DOM interactions
-   - Communicates with the background service
-
-3. **Options Page** (`Options.jsx`)
-   - API key configuration
-   - User preferences
-   - Extension settings
-
-4. **Main Interface** (`App.jsx`)
-   - Chat interface
-   - Product analysis
-   - User interactions
-
-## Design Decisions
-
-### 1. Chrome Extension Architecture
-- Chose Manifest V3 for future compatibility
-- Used content scripts for seamless Amazon integration
-- Implemented service worker for background processing
-
-### 2. User Interface
-- Floating overlay for easy access
-- Chat-based interface for natural interaction
-- Minimalist design to avoid cluttering shopping experience
-
-### 3. Security
-- Local API key storage
-- Secure message passing
-- Content security policies
-- Host permissions limited to Amazon domains
-
-### 4. Performance
-- Lazy loading of components
-- Efficient state management
-- Optimized API calls
-- Local storage for chat history
+- Note your extension ID for Google OAuth configuration
 
 ## Development
 
-### Commands
+### Available Scripts
+
 ```bash
-# Development build with hot reload
+# Start development server
 npm run dev
 
-# Production build
+# Build for production
 npm run build
 
 # Lint code
 npm run lint
 
-# Run tests
-npm run test
+# Preview production build
+npm run preview
 ```
 
-### Adding Features
-1. Create new component in `src/components`
-2. Update manifest if new permissions needed
-3. Add to main App or relevant parent component
-4. Test thoroughly across different Amazon pages
+### Project Structure
 
-### Testing
-- Unit tests for components
-- Integration tests for API calls
-- End-to-end tests for user flows
-- Manual testing on various Amazon pages
+```
+anna-ai/
+├── public/
+│   ├── icons/              # Extension icons
+│   ├── background.js       # Service worker
+│   ├── content.js          # Content script
+│   └── manifest.json       # Extension manifest
+├── src/
+│   ├── components/         # React components
+│   ├── pages/             # Page components
+│   ├── App.jsx            # Main application
+│   └── index.jsx          # Entry point
+├── scripts/
+│   └── process-manifest.js # Build processing
+└── package.json
+```
+
+### Key Features Implementation
+
+1. **Authentication**
+   - Google OAuth 2.0 integration
+   - Secure token handling
+   - Persistent user sessions
+
+2. **Product Analysis**
+   - Real-time Amazon product scraping
+   - OpenAI-powered analysis
+   - Price and feature comparison
+
+3. **Chat Interface**
+   - Natural language processing
+   - Context-aware responses
+   - Message history persistence
+
+4. **Settings Management**
+   - User-specific API keys
+   - Customizable preferences
+   - Secure storage
+
+## Security
+
+- Environment variables for sensitive data
+- Content Security Policy implementation
+- Secure message passing between components
+- Local storage encryption for sensitive data
+- Host permissions limited to Amazon domains
+- No server-side storage of API keys
 
 ## Contributing
 
@@ -146,20 +145,3 @@ npm run test
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- OpenAI for their powerful API
-- Chrome Extensions documentation
-- React and Vite communities
-- All contributors and testers
-
-## Support
-
-For support, please open an issue in the GitHub repository or contact the maintainers directly.
-
----
