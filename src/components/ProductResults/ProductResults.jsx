@@ -2,17 +2,14 @@ import React from 'react';
 import './ProductResults.css';
 
 const ProductResults = ({ products }) => {
-  console.log('ProductResults received products:', products);
 
   if (!products || products.length === 0) {
-    console.log('No products to display');
     return null;
   }
 
   return (
     <div className="product-results">
       {products.map((product, index) => {
-        console.log('Rendering product:', product);
         return (
           <a 
             key={product.asin || index} 

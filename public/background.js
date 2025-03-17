@@ -20,12 +20,56 @@ const POPUP_CONFIG = {
   }
 };
 
-// Keep track of requests
-let requestHistory = [];
-let openaiApiKey = null;
+// Initialize state
+chrome.runtime.onInstalled.addListener(async () => {
+  await chrome.storage.local.set({
+    requestHistory: [],
+    openaiApiKey: null,
+    activePopups: {},
+    lastKeepAliveTime: Date.now()
+  });
+});
 
-// Track active popups
-let activePopups = new Map();
+// Keep service worker active with periodic state check
+async function checkKeepAlive() {
+  const { lastKeepAliveTime } = await chrome.storage.local.get('lastKeepAliveTime');
+  const now = Date.now();
+  
+  if (now - lastKeepAliveTime > 20000) {
+    console.log('Service worker keepalive ping');
+    await chrome.storage.local.set({ lastKeepAliveTime: now });
+  }
+}
+
+// Set up periodic keep-alive check
+setInterval(checkKeepAlive, 20000);
+
+// Handle service worker activation
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('Service Worker starting up');
+  await chrome.storage.local.set({
+    requestHistory: [],
+    activePopups: {},
+    lastKeepAliveTime: Date.now()
+  });
+});
+
+// Store state in chrome.storage instead of global variables
+async function getState() {
+  const state = await chrome.storage.local.get(['requestHistory', 'openaiApiKey', 'activePopups']);
+  return {
+    requestHistory: state.requestHistory || [],
+    openaiApiKey: state.openaiApiKey || null,
+    activePopups: state.activePopups || {}
+  };
+}
+
+async function setState(updates) {
+  const current = await getState();
+  const newState = { ...current, ...updates };
+  await chrome.storage.local.set(newState);
+  return newState;
+}
 
 // Function to test OpenAI API key with a sample request
 async function testOpenAIKey(apiKey) {
@@ -66,12 +110,7 @@ async function storeOpenAIKey(apiKey) {
     
     // Test the API key with a real request
     await testOpenAIKey(apiKey);
-
-    await chrome.storage.local.set({ 
-      'openai_api_key': apiKey 
-    });
-    
-    openaiApiKey = apiKey;
+    await setState({ openaiApiKey: apiKey });
     
     return true;
   } catch (error) {
@@ -82,19 +121,15 @@ async function storeOpenAIKey(apiKey) {
 
 // Function to retrieve the stored OpenAI API key
 async function getStoredOpenAIKey() {
-  try {
-    const data = await chrome.storage.local.get('openai_api_key');
-    return data.openai_api_key || null;
-  } catch (error) {
-    console.error('Error retrieving API key:', error);
-    return null;
-  }
+  const state = await getState();
+  return state.openaiApiKey;
 }
 
 // Initialize OpenAI configuration
 async function initializeOpenAIConfig() {
   try {
-    openaiApiKey = await getStoredOpenAIKey();
+    const apiKey = await getStoredOpenAIKey();
+    await setState({ openaiApiKey: apiKey });
   } catch (error) {
     console.error('Error initializing OpenAI config:', error);
   }
@@ -107,7 +142,11 @@ initializeOpenAIConfig();
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'popupClosed') {
     if (request.tabId) {
-      activePopups.delete(request.tabId);
+      (async () => {
+        const state = await getState();
+        const { [request.tabId]: removed, ...remainingPopups } = state.activePopups;
+        await setState({ activePopups: remainingPopups });
+      })();
     }
     return;
   }
@@ -176,12 +215,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'searchProducts') {
-    // Extract requested items count if provided
-    const requestedItems = request.itemCount || 3;
-    request.filters = request.filters || {};
-    request.filters.requestedItems = requestedItems;
-    
-    handleSearchProducts(request, sender, sendResponse);
+    console.log('Received search request:', request.query);
+    (async () => {
+      try {
+        // Get current state
+        const state = await getState();
+        
+        // Get the current user ID from storage
+        const { currentUserId } = await chrome.storage.local.get('currentUserId');
+        if (!currentUserId) {
+          throw new Error('User not authenticated');
+        }
+
+        // Get the API key for the current user
+        const data = await chrome.storage.local.get(`apiKey_${currentUserId}`);
+        const apiKey = data[`apiKey_${currentUserId}`];
+        
+        if (!apiKey) {
+          throw new Error('OpenAI API key not configured');
+        }
+
+        // Update state with API key
+        await setState({ openaiApiKey: apiKey });
+
+        const result = await handleSearchProducts(request, sender, sendResponse);
+        if (result !== undefined) {
+          sendResponse(result);
+        }
+      } catch (error) {
+        console.error('Search error in listener:', error);
+        sendResponse({ error: error.message || 'Failed to search products' });
+      }
+    })();
     return true;
   }
 });
@@ -203,9 +268,14 @@ async function handleSearchProducts(request, sender, sendResponse) {
     if (!apiKey) {
       throw new Error('OpenAI API key not configured');
     }
+    if (!request.query) {
+      throw new Error('Search query is required');
+    }
 
-    console.log('Received search request:', request.query);
-    const parsedQuery = await generateOptimizedQuery(request.query);
+    console.log('Processing search query:', request.query);
+    const parsedQuery = await generateOptimizedQuery(request.query);    
+    console.log('Generated optimized query:', parsedQuery);
+
     const result = await handleProductSearch(parsedQuery.searchTerm, parsedQuery.filters);
     
     if (!result.products || result.products.length === 0) {
@@ -237,9 +307,6 @@ async function handleSearchProducts(request, sender, sendResponse) {
       error: 'Search timed out. Please try again.' 
     });
   }, 25000);
-
-  // Keep the message channel open
-  return true;
 }
 
 // Parse natural language query into search terms and filters
@@ -247,41 +314,65 @@ function parseNaturalLanguageQuery(query) {
   const filters = {};
   let searchTerm = query;
 
-  // Extract price range
-  const underPrice = query.match(/under\s*\$?\s*(\d+)/i);
-  const overPrice = query.match(/over\s*\$?\s*(\d+)/i);
-  const betweenPrice = query.match(/between\s*\$?\s*(\d+)\s*(?:and|to|-)\s*\$?\s*(\d+)/i);
+  // Extract price range with more comprehensive patterns
+  const pricePatterns = [
+    { pattern: /under\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
+    { pattern: /less\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
+    { pattern: /cheaper\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
+    { pattern: /over\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
+    { pattern: /more\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
+    { pattern: /above\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
+    { pattern: /between\s*\$?\s*(\d+(?:\.\d{2})?)\s*(?:and|to|-)\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'range' }
+  ];
 
-  if (betweenPrice) {
-    filters.minPrice = parseInt(betweenPrice[1]);
-    filters.maxPrice = parseInt(betweenPrice[2]);
-    searchTerm = searchTerm.replace(betweenPrice[0], '');
-  } else {
-    if (underPrice) {
-      filters.maxPrice = parseInt(underPrice[1]);
-      searchTerm = searchTerm.replace(underPrice[0], '');
+  // Try each price pattern
+  for (const { pattern, type } of pricePatterns) {
+    const match = searchTerm.match(pattern);
+    if (match) {
+      if (type === 'range') {
+        filters.minPrice = parseFloat(match[1]);
+        filters.maxPrice = parseFloat(match[2]);
+      } else if (type === 'min') {
+        filters.minPrice = parseFloat(match[1]);
+      } else if (type === 'max') {
+        filters.maxPrice = parseFloat(match[1]);
+      }
+      searchTerm = searchTerm.replace(match[0], '');
+      break;
     }
-    if (overPrice) {
-      filters.minPrice = parseInt(overPrice[1]);
-      searchTerm = searchTerm.replace(overPrice[0], '');
+  }
+
+  // Extract review count requirements
+  const reviewCountPatterns = [
+    /(?:with|has|having)\s+(?:at\s+least\s+)?(\d[\d,]*)\s+reviews?/i,
+    /(\d[\d,]*)\+?\s+reviews?/i,
+    /more\s+than\s+(\d[\d,]*)\s+reviews?/i
+  ];
+
+  for (const pattern of reviewCountPatterns) {
+    const match = searchTerm.match(pattern);
+    if (match) {
+      filters.minReviewCount = parseInt(match[1].replace(/,/g, ''));
+      searchTerm = searchTerm.replace(match[0], '');
+      break;
     }
   }
 
   // Extract Prime preference
-  if (/\b(?:with\s+)?prime(?:\s+shipping)?\b/i.test(query)) {
+  if (/\b(?:with\s+)?prime(?:\s+shipping)?\b/i.test(searchTerm)) {
     filters.prime = true;
     searchTerm = searchTerm.replace(/\b(?:with\s+)?prime(?:\s+shipping)?\b/i, '');
   }
 
   // Extract rating preference
-  const rating = query.match(/(\d+(?:\.\d+)?)\+?\s*stars?/i);
+  const rating = searchTerm.match(/(\d+(?:\.\d+)?)\+?\s*stars?/i);
   if (rating) {
     filters.minRating = parseFloat(rating[1]);
     searchTerm = searchTerm.replace(rating[0], '');
   }
 
   // Extract shipping preferences
-  if (/\bfree shipping\b/i.test(query)) {
+  if (/\bfree shipping\b/i.test(searchTerm)) {
     filters.freeShipping = true;
     searchTerm = searchTerm.replace(/\bfree shipping\b/i, '');
   }
@@ -289,37 +380,42 @@ function parseNaturalLanguageQuery(query) {
   // Extract delivery time preferences
   const nextDay = /\b(?:next|one)\s*day\s*(?:delivery|shipping)\b/i;
   const twoDay = /\btwo\s*day\s*(?:delivery|shipping)\b/i;
-  if (nextDay.test(query)) {
+  if (nextDay.test(searchTerm)) {
     filters.deliverySpeed = 'next-day';
     searchTerm = searchTerm.replace(nextDay, '');
-  } else if (twoDay.test(query)) {
+  } else if (twoDay.test(searchTerm)) {
     filters.deliverySpeed = 'two-day';
     searchTerm = searchTerm.replace(twoDay, '');
   }
 
   // Extract condition preferences
-  if (/\bnew\b/i.test(query)) {
+  if (/\bnew\b/i.test(searchTerm)) {
     filters.condition = 'new';
     searchTerm = searchTerm.replace(/\bnew\b/i, '');
-  } else if (/\bused\b/i.test(query)) {
+  } else if (/\bused\b/i.test(searchTerm)) {
     filters.condition = 'used';
     searchTerm = searchTerm.replace(/\bused\b/i, '');
-  } else if (/\brefurbished\b/i.test(query)) {
+  } else if (/\brefurbished\b/i.test(searchTerm)) {
     filters.condition = 'refurbished';
     searchTerm = searchTerm.replace(/\brefurbished\b/i, '');
   }
 
   // Extract brand preferences
-  const brandMatch = query.match(/\bby\s+([A-Za-z0-9\s]+?)(?:\s+(?:brand|company))?\b/i);
+  const brandMatch = searchTerm.match(/\bby\s+([A-Za-z0-9\s]+?)(?:\s+(?:brand|company))?\b/i);
   if (brandMatch) {
     filters.brand = brandMatch[1].trim();
     searchTerm = searchTerm.replace(brandMatch[0], '');
   }
 
-  // Clean up search term
+  // Clean up search term - remove extra spaces and normalize
   searchTerm = searchTerm
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .toLowerCase();
+
+  // Remove duplicate words
+  const terms = new Set(searchTerm.split(' '));
+  searchTerm = Array.from(terms).join(' ');
 
   return {
     searchTerm,
@@ -327,132 +423,41 @@ function parseNaturalLanguageQuery(query) {
   };
 }
 
-// Navigate to search results (either in current or new tab)
-async function navigateToSearch(query, filters, currentTab, isAmazonTab) {
-  const url = constructSearchUrl(query, filters, true);
-  
-  if (isAmazonTab) {
-    // Update the current Amazon tab
-    await chrome.tabs.update(currentTab.id, { url });
-  } else {
-    // Open a new tab if we're not on Amazon
-    await chrome.tabs.create({ url, active: true });
-  }
-}
-
 // Construct Amazon search URL with filters
 function constructSearchUrl(query, filters, isDirectSearch = false) {
   const baseUrl = 'https://www.amazon.com/s';
   const params = new URLSearchParams();
 
-  // Build search query with filters
-  let searchQuery = query;
+  // Clean up search query - remove extra spaces and duplicates
+  const searchTerms = new Set(query.toLowerCase().split(/\s+/));
+  const cleanQuery = Array.from(searchTerms).join(' ');
   
-  // Handle exclude terms
-  if (filters.excludeTerms && filters.excludeTerms.length > 0) {
-    filters.excludeTerms.forEach(term => {
-      searchQuery = `${searchQuery} -${term}`;
-    });
-  }
-
   // Add search query
-  params.append('k', searchQuery);
+  params.append('k', cleanQuery);
 
-  // Add ref and encoding parameters
-  if (!isDirectSearch) {
-    params.append('ref', `sr_nr_${Math.floor(Math.random() * 100)}`);
-    params.append('crid', generateRandomString(21));
-    params.append('sprefix', `${query.toLowerCase().replace(/[^a-z0-9]/g, '')}%2Caps%2C${Math.floor(Math.random() * 300)}`);
-    params.append('qid', generateRandomString(20));
+  // Add price filters using Amazon's native price filter parameters
+  let priceRefinement = '';
+  if (filters.minPrice && filters.maxPrice) {
+    // Both min and max price
+    params.append('low-price', Math.floor(filters.minPrice));
+    params.append('high-price', Math.ceil(filters.maxPrice));
+    priceRefinement = `p_36:${Math.floor(filters.minPrice)}00-${Math.ceil(filters.maxPrice)}00`;
+  } else if (filters.minPrice) {
+    // Only min price
+    params.append('low-price', Math.floor(filters.minPrice));
+    priceRefinement = `p_36:${Math.floor(filters.minPrice)}00-`;
+  } else if (filters.maxPrice) {
+    // Only max price
+    params.append('high-price', Math.ceil(filters.maxPrice));
+    priceRefinement = `p_36:-${Math.ceil(filters.maxPrice)}00`;
   }
 
-  // Add filters
-  let rh = [];
-
-  // Prime filter
-  if (filters.prime) {
-    rh.push('p_85:2470955011');
+  // Add refinements if we have any
+  if (priceRefinement) {
+    params.append('rh', priceRefinement);
   }
 
-  // Price range filter
-  if (filters.minPrice || filters.maxPrice) {
-    let priceFilter = 'p_36:';
-    if (filters.minPrice) priceFilter += filters.minPrice * 100;
-    priceFilter += '-';
-    if (filters.maxPrice) priceFilter += filters.maxPrice * 100;
-    else priceFilter += '999999999';
-    rh.push(priceFilter);
-  }
-
-  // Rating filter
-  if (filters.minRating) {
-    rh.push(`p_72:${Math.ceil(filters.minRating)}-`);
-  }
-
-  // Condition filter
-  if (filters.condition) {
-    const conditionMap = {
-      'new': 'p_n_condition-type:6461716011',
-      'used': 'p_n_condition-type:6461717011',
-      'refurbished': 'p_n_condition-type:6461718011'
-    };
-    if (conditionMap[filters.condition]) {
-      rh.push(conditionMap[filters.condition]);
-    }
-  }
-
-  // Delivery speed filter
-  if (filters.deliverySpeed) {
-    const deliveryMap = {
-      'next-day': 'p_97:11292772011',
-      'two-day': 'p_97:11292771011'
-    };
-    if (deliveryMap[filters.deliverySpeed]) {
-      rh.push(deliveryMap[filters.deliverySpeed]);
-    }
-  }
-
-  // Free shipping filter
-  if (filters.freeShipping) {
-    rh.push('p_76:1');
-  }
-
-  // Brand filter
-  if (filters.brand) {
-    rh.push(`p_89:${encodeURIComponent(filters.brand)}`);
-  }
-
-  // Handle dynamic attributes based on product type
-  if (filters.attributes) {
-    // Size filter (clothing, shoes, etc.)
-    if (filters.attributes.size) {
-      rh.push(`p_n_size_browse-vebin:${getSizeFilter(filters.attributes.size)}`);
-    }
-
-    // Color filter
-    if (filters.attributes.color) {
-      rh.push(`p_n_feature_twenty_browse-bin:${getColorFilter(filters.attributes.color)}`);
-    }
-
-    // Book format filter
-    if (filters.attributes.format) {
-      const formatMap = {
-        'hardcover': 'p_n_binding_browse-bin:1232478011',
-        'paperback': 'p_n_binding_browse-bin:1232478011',
-        'kindle': 'p_n_binding_browse-bin:1232597011',
-        'audiobook': 'p_n_binding_browse-bin:1232596011'
-      };
-      const formatFilter = formatMap[filters.attributes.format.toLowerCase()];
-      if (formatFilter) rh.push(formatFilter);
-    }
-  }
-
-  // Combine all refinements
-  if (rh.length > 0) {
-    params.append('rh', rh.join(','));
-  }
-
-  // Add search index based on product type if available
+  // Add department/category if available
   if (filters.productType) {
     const searchIndex = getSearchIndex(filters.productType);
     if (searchIndex) {
@@ -460,7 +465,74 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
     }
   }
 
-  return `${baseUrl}?${params.toString()}`;
+  // Sort by price when price filters are present
+  if (filters.minPrice || filters.maxPrice) {
+    params.append('s', 'price-asc-rank');
+  }
+
+  // Prime filter
+  if (filters.prime) {
+    params.append('p_85', '2470955011');
+  }
+
+  // Rating filter
+  if (filters.minRating) {
+    const ratingValue = Math.ceil(filters.minRating);
+    const ratingMap = {
+      4: '1248882011',
+      3: '1248883011',
+      2: '1248884011',
+      1: '1248885011'
+    };
+    if (ratingMap[ratingValue]) {
+      params.append('p_72', ratingMap[ratingValue]);
+    }
+  }
+
+  // Free shipping filter
+  if (filters.freeShipping) {
+    params.append('p_76', '1');
+  }
+
+  // Brand filter
+  if (filters.brand) {
+    params.append('p_89', filters.brand);
+  }
+
+  // Condition filter
+  if (filters.condition) {
+    const conditionMap = {
+      'new': '6461716011',
+      'used': '6461717011',
+      'refurbished': '6461718011'
+    };
+    if (conditionMap[filters.condition]) {
+      params.append('p_n_condition-type', conditionMap[filters.condition]);
+    }
+  }
+
+  // Delivery speed filter
+  if (filters.deliverySpeed) {
+    const deliveryMap = {
+      'next-day': '11292772011',
+      'two-day': '11292771011'
+    };
+    if (deliveryMap[filters.deliverySpeed]) {
+      params.append('p_97', deliveryMap[filters.deliverySpeed]);
+    }
+  }
+
+  // Add standard Amazon parameters
+  params.append('ref', 'sr_st_price-asc-rank');
+  params.append('dc', '');
+  params.append('qid', generateRandomString(20));
+  params.append('sprefix', cleanQuery.replace(/[^a-z0-9]/g, ''));
+  params.append('language', 'en_US');
+
+  // Construct the final URL
+  const url = new URL(baseUrl);
+  url.search = params.toString();
+  return url.toString();
 }
 
 // Helper function to get search index based on product type
@@ -506,39 +578,41 @@ function getColorFilter(color) {
 }
 
 // Check if we're within rate limits
-function checkRateLimit() {
+async function checkRateLimit() {
+  const state = await getState();
   const now = Date.now();
-  // Remove requests older than 1 hour
-  requestHistory = requestHistory.filter(time => now - time < 3600000);
   
-  if (requestHistory.length >= RATE_LIMIT.MAX_REQUESTS_PER_HOUR) {
+  // Remove requests older than 1 hour
+  const updatedHistory = state.requestHistory.filter(time => now - time < 3600000);
+  
+  if (updatedHistory.length >= RATE_LIMIT.MAX_REQUESTS_PER_HOUR) {
     throw new Error('Rate limit exceeded. Please try again later.');
   }
   
   // Check if we need to wait between requests
-  const lastRequest = requestHistory[requestHistory.length - 1];
+  const lastRequest = updatedHistory[updatedHistory.length - 1];
   if (lastRequest && now - lastRequest < RATE_LIMIT.DELAY_BETWEEN_REQUESTS) {
     const waitTime = RATE_LIMIT.DELAY_BETWEEN_REQUESTS - (now - lastRequest);
-    return new Promise(resolve => setTimeout(resolve, waitTime));
+    await new Promise(resolve => setTimeout(resolve, waitTime));
   }
   
-  return Promise.resolve();
+  // Update request history
+  updatedHistory.push(now);
+  await setState({ requestHistory: updatedHistory });
 }
 
 // Handle product search
 async function handleProductSearch(query, filters = {}, popupTab = null) {
   // Maintain rate limiting
   await checkRateLimit();
-  requestHistory.push(Date.now());
   
   // Get user settings
   const settings = await chrome.storage.local.get(['maxResults', 'skipSponsored']);
-  const maxResults = filters.requestedItems || settings.maxResults || 3;
+  const maxResults = settings.maxResults || 3;
   
   try {
-    // Construct search URL for later use
-    const searchUrl = constructSearchUrl(query, filters);
-    console.log('Search URL prepared:', searchUrl);
+    // Construct search URL with isDirectSearch=true to include all filters
+    const searchUrl = constructSearchUrl(query, filters, true);
     
     // Create a hidden tab for scraping
     const searchTab = await chrome.tabs.create({ 
@@ -638,32 +712,42 @@ function generateRandomString(length) {
 
 // Function that will be injected into the page to scrape results
 function scrapeSearchResults(filters) {
-  console.log('Starting product scraping with filters:', filters);
-
   // Function to extract text content safely
   const extractText = (element) => element ? element.textContent.trim() : null;
 
   // Function to extract number from text
-  const extractNumber = (text) => text ? parseFloat(text.replace(/[^0-9.]/g, '')) : null;
+  const extractNumber = (text) => {
+    if (!text) return null;
+    const match = text.match(/[\d,]+\.?\d*/);
+    return match ? parseFloat(match[0].replace(/,/g, '')) : null;
+  };
 
-  // Function to clean up price
-  const cleanPrice = (price) => {
-    if (!price) return null;
-    price = price.trim();
-    // Remove any non-price text (like "from", "starting at", etc.)
-    price = price.replace(/^(from|starting at|as low as)\s*/i, '');
-    // Extract the first price if there are multiple
-    price = price.split('-')[0].trim();
-    // Handle whole number prices without cents
-    if (price.match(/^\$\d+$/)) {
-      price = price + '.00';
-    }
-    // Clean up and ensure proper format
-    const priceMatch = price.match(/\$?\d+(\.\d{2})?/);
+  // Function to clean up and validate price
+  const cleanPrice = (priceText) => {
+    if (!priceText) return null;
+    
+    // Remove any non-price text and take first price if range
+    priceText = priceText.trim()
+      .replace(/^(from|starting at|as low as)\s*/i, '')
+      .split('-')[0]
+      .trim();
+    
+    // Extract price value
+    const priceMatch = priceText.match(/\$?([\d,]+\.?\d*)/);
     if (!priceMatch) return null;
-    const cleanedPrice = priceMatch[0];
-    // Ensure $ is at the start
-    return cleanedPrice.startsWith('$') ? cleanedPrice : `$${cleanedPrice}`;
+    
+    // Convert to number for comparison
+    const priceValue = parseFloat(priceMatch[1].replace(/,/g, ''));
+    if (isNaN(priceValue)) return null;
+    
+    // Check price against filters
+    if (filters.minPrice && priceValue < filters.minPrice) return null;
+    if (filters.maxPrice && priceValue > filters.maxPrice) return null;
+    
+    return {
+      formatted: `$${priceValue.toFixed(2)}`,
+      value: priceValue
+    };
   };
 
   // Function to find price element with multiple selectors
@@ -682,8 +766,15 @@ function scrapeSearchResults(filters) {
     for (const selector of selectors) {
       const element = card.querySelector(selector);
       if (element) {
-        const price = cleanPrice(extractText(element));
-        if (price) return element;
+        const priceText = extractText(element);
+        const price = cleanPrice(priceText);
+        if (price) {
+          return {
+            element,
+            price: price.formatted,
+            value: price.value
+          };
+        }
       }
     }
     return null;
@@ -691,13 +782,33 @@ function scrapeSearchResults(filters) {
 
   // Function to validate product information
   const isValidProduct = (product) => {
-    return product.title && 
-           product.price && // Now required
-           product.asin && 
-           product.url && 
-           product.image &&
-           typeof product.rating === 'number' &&
-           typeof product.reviewCount === 'number';
+    if (!product.title || !product.asin || !product.url || !product.image ||
+        typeof product.rating !== 'number' || typeof product.reviewCount !== 'number') {
+      return false;
+    }
+
+    // Strict price validation
+    if (!product.price || typeof product.priceValue !== 'number') {
+      return false;
+    }
+    
+    // Double-check price against filters
+    if (filters.minPrice && product.priceValue < filters.minPrice) return false;
+    if (filters.maxPrice && product.priceValue > filters.maxPrice) return false;
+
+    // Review count validation
+    if (filters.minReviewCount && (!product.reviewCount || product.reviewCount < filters.minReviewCount)) {
+      console.log(`Filtering out product with ${product.reviewCount} reviews < minimum ${filters.minReviewCount}`);
+      return false;
+    }
+
+    // Rating validation
+    if (filters.minRating && (!product.rating || product.rating < filters.minRating)) {
+      console.log(`Filtering out product with ${product.rating} rating < minimum ${filters.minRating}`);
+      return false;
+    }
+
+    return true;
   };
 
   try {
@@ -713,7 +824,7 @@ function scrapeSearchResults(filters) {
     console.log('Found product cards:', productCards.length);
 
     const products = [];
-    const maxAttempts = Math.min(100, productCards.length); // Increased to 100 to find more products with prices
+    const maxAttempts = Math.min(100, productCards.length);
     
     for (let i = 0; i < maxAttempts && products.length < filters.maxResults; i++) {
       try {
@@ -731,18 +842,19 @@ function scrapeSearchResults(filters) {
 
         // Find elements using multiple possible selectors for better coverage
         const titleEl = card.querySelector('h2 a, h2 span a, .a-link-normal.a-text-normal');
-        const priceEl = findPriceElement(card);
+        const priceInfo = findPriceElement(card);
         const ratingEl = card.querySelector('.a-icon-star-small, .a-star-small-4, .a-icon-star');
         const reviewCountEl = card.querySelector('.a-size-base.s-underline-text, .a-size-base.a-link-normal');
         const primeEl = card.querySelector('.s-prime, .a-icon-prime, .aok-relative.s-icon-text-medium.s-prime');
         const imageEl = card.querySelector('img.s-image, .s-image');
 
-        if (titleEl && priceEl) {  // Only proceed if we have both title and price
+        if (titleEl && priceInfo) {
           const product = {
             asin,
             title: extractText(titleEl),
             url: new URL(titleEl.href || titleEl.closest('a').href, window.location.origin).href,
-            price: cleanPrice(extractText(priceEl)),
+            price: priceInfo.price,
+            priceValue: priceInfo.value,
             rating: ratingEl ? extractNumber(extractText(ratingEl)) : 0,
             reviewCount: reviewCountEl ? extractNumber(extractText(reviewCountEl)) : 0,
             isPrime: !!primeEl,
@@ -750,17 +862,27 @@ function scrapeSearchResults(filters) {
             sponsored: false
           };
 
-          // Only add products with complete information
+          // Only add products with complete information and matching price filters
           if (isValidProduct(product)) {
             console.log('Scraped valid product:', product);
             products.push(product);
           } else {
-            console.log('Skipping product with incomplete information:', product);
+            console.log('Skipping product with invalid information or price:', {
+              title: product.title,
+              price: product.price,
+              priceValue: product.priceValue,
+              filters: { min: filters.minPrice, max: filters.maxPrice }
+            });
           }
         }
       } catch (e) {
         console.error('Error parsing product card:', e);
       }
+    }
+
+    // Sort products by price if price filters are present
+    if (filters.minPrice || filters.maxPrice) {
+      products.sort((a, b) => a.priceValue - b.priceValue);
     }
 
     console.log(`Total valid products scraped: ${products.length}`);
@@ -774,7 +896,8 @@ function scrapeSearchResults(filters) {
 
 // Function to generate optimized search query using OpenAI
 async function generateOptimizedQuery(userQuery) {
-  if (!openaiApiKey) {
+  const state = await getState();
+  if (!state.openaiApiKey) {
     throw new Error('OpenAI API key not configured');
   }
 
@@ -801,6 +924,7 @@ async function generateOptimizedQuery(userQuery) {
                     "maxPrice": number or null,
                     "prime": boolean,
                     "minRating": number or null,
+                    "minReviewCount": number or null,
                     "freeShipping": boolean,
                     "deliverySpeed": "next-day" | "two-day" | null,
                     "condition": "new" | "used" | "refurbished" | null,
@@ -824,10 +948,14 @@ async function generateOptimizedQuery(userQuery) {
                 Examples:
                 1. "Find me a waterproof phone case similar to OtterBox but cheaper"
                 2. "Show me cotton t-shirts in blue or navy, size large, under $30"
-                3. "I need a 1TB SSD hard drive with USB-C connection and good reviews"
-                4. "Find me fantasy books like Lord of the Rings but in paperback"
-                5. "Show me hypoallergenic face moisturizer for sensitive skin without fragrance"
-                6. "I want a coffee maker with a grinder, programmable timer, and thermal carafe"`
+                3. "I need a 1TB SSD hard drive with USB-C connection and at least 1000 reviews"
+                4. "Find me fantasy books like Lord of the Rings but in paperback with over 500 reviews"
+                5. "Show me hypoallergenic face moisturizer for sensitive skin with at least 2000 reviews"
+                6. "I want a coffee maker with a grinder and at least 100 positive reviews"
+                7. "Show me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
+                8. "Find me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
+                9. "Show me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
+                10. "Find me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"`
     }, {
       role: 'user',
       content: userQuery
@@ -839,12 +967,12 @@ async function generateOptimizedQuery(userQuery) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openaiApiKey}`
+        'Authorization': `Bearer ${state.openaiApiKey}`
       },
       body: JSON.stringify({
         model: OPENAI_CONFIG.MODEL,
         messages: prompt.messages,
-        max_tokens: OPENAI_CONFIG.MAX_TOKENS, // Increased to handle more detailed responses
+        max_tokens: OPENAI_CONFIG.MAX_TOKENS,
         temperature: OPENAI_CONFIG.TEMPERATURE
       })
     });
@@ -856,12 +984,15 @@ async function generateOptimizedQuery(userQuery) {
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
     
+    console.log('Raw OpenAI Response:', data);
+    console.log('Parsed OpenAI Result:', result);
+    
     // Enhance the search URL with additional filters
     const enhancedFilters = {
       ...result.filters,
       searchTerm: result.searchTerm
     };
-
+    console.log('Enhanced Filters:', enhancedFilters);
     // Add product type specific terms to the search
     if (result.productType && result.filters.attributes) {
       const attributeTerms = Object.values(result.filters.attributes)
@@ -893,8 +1024,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Function to show popup on Amazon pages
 async function showPopupOnAmazonPage(tabId, url) {
   try {
+    const state = await getState();
+    
     // Don't show popup if one is already active for this tab
-    if (activePopups.has(tabId)) {
+    if (state.activePopups[tabId]) {
       return;
     }
 
@@ -963,12 +1096,15 @@ async function showPopupOnAmazonPage(tabId, url) {
     });
 
     // Track active popup
-    activePopups.set(tabId, true);
+    const updatedPopups = { ...state.activePopups, [tabId]: true };
+    await setState({ activePopups: updatedPopups });
 
     // Clean up when tab is closed or navigated away
-    chrome.tabs.onRemoved.addListener((removedTabId) => {
+    chrome.tabs.onRemoved.addListener(async (removedTabId) => {
       if (removedTabId === tabId) {
-        activePopups.delete(tabId);
+        const currentState = await getState();
+        const { [removedTabId]: removed, ...remainingPopups } = currentState.activePopups;
+        await setState({ activePopups: remainingPopups });
       }
     });
 

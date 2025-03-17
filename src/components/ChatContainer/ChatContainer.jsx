@@ -20,7 +20,6 @@ const ChatContainer = ({ messages, isTyping }) => {
   return (
     <div className="chat-container" ref={containerRef}>
       {messages.map((message, index) => {
-        console.log('Rendering message:', message);
         return (
           <div key={index}>
             <Message
@@ -30,7 +29,6 @@ const ChatContainer = ({ messages, isTyping }) => {
             />
             {message.products && (
               <div>
-                {console.log('Rendering products:', message.products)}
                 <ProductResults products={message.products} />
               </div>
             )}

@@ -137,6 +137,21 @@ const Options = () => {
     }
   };
 
+  const resetChat = async () => {
+    if (!userId) {
+      showStatus('Please log in to reset chat history', 'error');
+      return;
+    }
+
+    try {
+      // Remove chat history for the current user
+      await chrome.storage.local.remove(`chatHistory_${userId}`);
+      showStatus('Chat history cleared successfully!', 'success');
+    } catch (error) {
+      showStatus('Error clearing chat history: ' + error.message, 'error');
+    }
+  };
+
   const showStatus = (message, type = 'info') => {
     setStatus({ message, type });
     setTimeout(() => setStatus({ message: '', type: '' }), 3000);
@@ -212,6 +227,16 @@ const Options = () => {
             onChange={handleInputChange}
           />
           <div className="help-text">Longer delays reduce the chance of being blocked</div>
+        </div>
+
+        <div className="form-group">
+          <label>Chat History</label>
+          <div className="chat-reset-container">
+            <p className="help-text">Clear your chat history when starting a new session</p>
+            <button type="button" onClick={resetChat} className="secondary">
+              Reset Chat History
+            </button>
+          </div>
         </div>
 
         <div className="buttons">

@@ -35,7 +35,6 @@ function App() {
           const { lastSearchResults } = await chrome.storage.local.get('lastSearchResults');
           let assistantMessage;
           if (lastSearchResults) {
-            console.log('Found stored search results:', lastSearchResults);
             assistantMessage = {
               type: 'assistant',
               text: 'Here are the products from your last search:',
@@ -135,9 +134,7 @@ function App() {
     setMessages(prev => [...prev, userMessage]);
     setIsTyping(true);
 
-    try {
-      console.log('Sending search request:', text);
-      
+    try {      
       // Create a promise that will reject if we don't get a response in time
       const responsePromise = new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
@@ -158,7 +155,6 @@ function App() {
       });
 
       const response = await responsePromise;
-      console.log('Received response:', response);
 
       if (response.error) {
         throw new Error(response.error);
@@ -235,7 +231,6 @@ function App() {
             if (chrome.runtime.lastError) {
               console.error('Error storing user ID:', chrome.runtime.lastError);
             } else {
-              console.log('Successfully stored user ID:', data.sub);
               // Update the user state and reload the popup
               setUser(userData);
               window.location.reload();
