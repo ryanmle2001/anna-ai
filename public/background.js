@@ -273,10 +273,10 @@ async function handleSearchProducts(request, sender, sendResponse) {
     }
 
     console.log('Processing search query:', request.query);
-    const parsedQuery = await generateOptimizedQuery(request.query);    
-    console.log('Generated optimized query:', parsedQuery);
+    const parsedQueryFilters = await generateOptimizedQuery(request.query);    
+    console.log('Generated optimized query:', parsedQueryFilters);
 
-    const result = await handleProductSearch(parsedQuery.searchTerm, parsedQuery.filters);
+    const result = await handleProductSearch(parsedQueryFilters.searchTerm, parsedQueryFilters);
     
     if (!result.products || result.products.length === 0) {
       sendResponse({ 
@@ -289,7 +289,7 @@ async function handleSearchProducts(request, sender, sendResponse) {
     sendResponse({ 
       products: result.products, 
       searchUrl: result.searchUrl,
-      filters: parsedQuery.filters 
+      filters: parsedQueryFilters
     });
   } catch (error) {
     console.error('Search error:', error);
@@ -425,6 +425,7 @@ function parseNaturalLanguageQuery(query) {
 
 // Construct Amazon search URL with filters
 function constructSearchUrl(query, filters, isDirectSearch = false) {
+  console.log('Constructing URL with filters:', filters);
   const baseUrl = 'https://www.amazon.com/s';
   const params = new URLSearchParams();
 
@@ -432,74 +433,65 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
   const searchTerms = new Set(query.toLowerCase().split(/\s+/));
   const cleanQuery = Array.from(searchTerms).join(' ');
   
-  // Add search query
-  params.append('k', cleanQuery);
-
   // Add price filters using Amazon's native price filter parameters
-  let priceRefinement = '';
+  let refinements = [];
+  
+  // Price refinement
   if (filters.minPrice && filters.maxPrice) {
-    // Both min and max price
+    refinements.push(`p_36:${Math.floor(filters.minPrice)}00-${Math.ceil(filters.maxPrice)}00`);
     params.append('low-price', Math.floor(filters.minPrice));
     params.append('high-price', Math.ceil(filters.maxPrice));
-    priceRefinement = `p_36:${Math.floor(filters.minPrice)}00-${Math.ceil(filters.maxPrice)}00`;
   } else if (filters.minPrice) {
-    // Only min price
+    refinements.push(`p_36:${Math.floor(filters.minPrice)}00-`);
     params.append('low-price', Math.floor(filters.minPrice));
-    priceRefinement = `p_36:${Math.floor(filters.minPrice)}00-`;
+    params.append('high-price', '');
   } else if (filters.maxPrice) {
-    // Only max price
+    refinements.push(`p_36:0-${Math.ceil(filters.maxPrice)}00`);
+    params.append('low-price', '');
     params.append('high-price', Math.ceil(filters.maxPrice));
-    priceRefinement = `p_36:-${Math.ceil(filters.maxPrice)}00`;
   }
 
-  // Add refinements if we have any
-  if (priceRefinement) {
-    params.append('rh', priceRefinement);
-  }
-
-  // Add department/category if available
-  if (filters.productType) {
-    const searchIndex = getSearchIndex(filters.productType);
-    if (searchIndex) {
-      params.append('i', searchIndex);
-    }
-  }
-
-  // Sort by price when price filters are present
-  if (filters.minPrice || filters.maxPrice) {
-    params.append('s', 'price-asc-rank');
-  }
-
-  // Prime filter
+  // Prime filter (p_85 is Prime eligibility)
   if (filters.prime) {
-    params.append('p_85', '2470955011');
+    refinements.push('p_85:2470955011');
+    params.append('prime', '1');
   }
 
-  // Rating filter
+  // Rating filter (p_72 is customer review rating)
   if (filters.minRating) {
     const ratingValue = Math.ceil(filters.minRating);
     const ratingMap = {
-      4: '1248882011',
-      3: '1248883011',
-      2: '1248884011',
-      1: '1248885011'
+      4: '1248882011', // 4+ stars
+      3: '1248883011', // 3+ stars
+      2: '1248884011', // 2+ stars
+      1: '1248885011'  // 1+ stars
     };
     if (ratingMap[ratingValue]) {
-      params.append('p_72', ratingMap[ratingValue]);
+      refinements.push(`p_72:${ratingMap[ratingValue]}`);
+      params.append('ratingFilter', ratingValue);
     }
   }
 
-  // Free shipping filter
+  // Review count filter (if present)
+  if (filters.minReviewCount) {
+    refinements.push(`p_n_global_review_count:${filters.minReviewCount}-`);
+  }
+
+  // Free shipping filter (p_76 is shipping options)
   if (filters.freeShipping) {
-    params.append('p_76', '1');
+    refinements.push('p_76:1');
+    params.append('shipping', 'free');
   }
 
-  // Brand filter
+  // Brand filter (p_89 is brand)
   if (filters.brand) {
-    params.append('p_89', filters.brand);
+    // Encode brand name for URL safety
+    const encodedBrand = encodeURIComponent(filters.brand);
+    refinements.push(`p_89:${encodedBrand}`);
+    params.append('brand', filters.brand);
   }
 
-  // Condition filter
+  // Condition filter (p_n_condition-type is condition)
   if (filters.condition) {
     const conditionMap = {
       'new': '6461716011',
@@ -507,23 +499,54 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
       'refurbished': '6461718011'
     };
     if (conditionMap[filters.condition]) {
-      params.append('p_n_condition-type', conditionMap[filters.condition]);
+      refinements.push(`p_n_condition-type:${conditionMap[filters.condition]}`);
+      params.append('condition', filters.condition);
     }
   }
 
-  // Delivery speed filter
+  // Delivery speed filter (p_97 is delivery speed)
   if (filters.deliverySpeed) {
     const deliveryMap = {
       'next-day': '11292772011',
       'two-day': '11292771011'
     };
     if (deliveryMap[filters.deliverySpeed]) {
-      params.append('p_97', deliveryMap[filters.deliverySpeed]);
+      refinements.push(`p_97:${deliveryMap[filters.deliverySpeed]}`);
+      params.append('delivery', filters.deliverySpeed);
     }
   }
 
+  // Department/category filter
+  if (filters.productType) {
+    const searchIndex = getSearchIndex(filters.productType);
+    if (searchIndex) {
+      params.append('i', searchIndex);
+      // Some categories have specific refinement codes
+      const categoryRefinements = getCategoryRefinements(filters.productType);
+      if (categoryRefinements) {
+        refinements.push(categoryRefinements);
+      }
+    }
+  }
+
+  // Combine all refinements with proper separator
+  if (refinements.length > 0) {
+    console.log('Final refinements:', refinements);
+    params.append('rh', refinements.join(','));
+  }
+
+  // Add search query
+  params.append('k', cleanQuery);
+
+  // Sort parameters
+  if (filters.minPrice || filters.maxPrice) {
+    params.append('s', 'price-asc-rank');
+  } else {
+    params.append('s', 'relevance-fs-rank'); // Default to featured/relevant items
+  }
+
   // Add standard Amazon parameters
-  params.append('ref', 'sr_st_price-asc-rank');
+  params.append('ref', 'sr_st_' + (filters.minPrice || filters.maxPrice ? 'price-asc-rank' : 'relevance-fs-rank'));
   params.append('dc', '');
   params.append('qid', generateRandomString(20));
   params.append('sprefix', cleanQuery.replace(/[^a-z0-9]/g, ''));
@@ -531,8 +554,27 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
 
   // Construct the final URL
   const url = new URL(baseUrl);
+  console.log('Params:', params.toString());
   url.search = params.toString();
+  console.log('Final URL:', url.toString());
   return url.toString();
+}
+
+// Helper function to get category-specific refinements
+function getCategoryRefinements(productType) {
+  const categoryMap = {
+    'electronics': 'n:172282',
+    'books': 'n:283155',
+    'clothing': 'n:7141123011',
+    'beauty': 'n:3760911',
+    'home': 'n:1055398',
+    'kitchen': 'n:284507',
+    'toys': 'n:165793011',
+    'sports': 'n:3375251',
+    'automotive': 'n:15684181',
+    'tools': 'n:228013'
+  };
+  return categoryMap[productType.toLowerCase()];
 }
 
 // Helper function to get search index based on product type
@@ -613,7 +655,7 @@ async function handleProductSearch(query, filters = {}, popupTab = null) {
   try {
     // Construct search URL with isDirectSearch=true to include all filters
     const searchUrl = constructSearchUrl(query, filters, true);
-    
+    console.log("Constructed search URL:", searchUrl);
     // Create a hidden tab for scraping
     const searchTab = await chrome.tabs.create({ 
       url: searchUrl,
@@ -992,7 +1034,6 @@ async function generateOptimizedQuery(userQuery) {
       ...result.filters,
       searchTerm: result.searchTerm
     };
-    console.log('Enhanced Filters:', enhancedFilters);
     // Add product type specific terms to the search
     if (result.productType && result.filters.attributes) {
       const attributeTerms = Object.values(result.filters.attributes)
