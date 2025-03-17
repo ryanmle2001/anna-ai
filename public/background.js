@@ -26,7 +26,8 @@ chrome.runtime.onInstalled.addListener(async () => {
     requestHistory: [],
     openaiApiKey: null,
     activePopups: {},
-    lastKeepAliveTime: Date.now()
+    lastKeepAliveTime: Date.now(),
+    conversationContext: [] // Add conversation context to state
   });
 });
 
@@ -56,11 +57,12 @@ chrome.runtime.onStartup.addListener(async () => {
 
 // Store state in chrome.storage instead of global variables
 async function getState() {
-  const state = await chrome.storage.local.get(['requestHistory', 'openaiApiKey', 'activePopups']);
+  const state = await chrome.storage.local.get(['requestHistory', 'openaiApiKey', 'activePopups', 'conversationContext']);
   return {
     requestHistory: state.requestHistory || [],
     openaiApiKey: state.openaiApiKey || null,
-    activePopups: state.activePopups || {}
+    activePopups: state.activePopups || {},
+    conversationContext: state.conversationContext || []
   };
 }
 
@@ -794,66 +796,92 @@ async function generateOptimizedQuery(userQuery) {
     throw new Error('OpenAI API key not configured');
   }
 
-  const prompt = {
-    messages: [{
-      role: 'system',
-      content: `You are a search query optimizer for Amazon products. Convert natural language queries into structured search terms and filters.
-                Analyze the query to understand product type and extract relevant attributes and filters.
-                
-                Consider these dynamic aspects for different product types:
-                - Electronics: storage capacity, screen size, processor, RAM, connectivity
-                - Clothing: size, color, material, style, fit, season
-                - Books: format (hardcover/paperback/kindle), language, genre
-                - Home goods: room type, dimensions, material, style
-                - Beauty: skin type, ingredients, concerns
-                - Food: dietary restrictions, ingredients, preparation
-                
-                Respond in JSON format with:
-                {
-                  "searchTerm": "optimized search keywords",
-                  "productType": "category of product being searched",
-                  "filters": {
-                    "minPrice": number or null,
-                    "maxPrice": number or null,
-                    "prime": boolean,
-                    "minRating": number or null,
-                    "minReviewCount": number or null,
-                    "freeShipping": boolean,
-                    "deliverySpeed": "next-day" | "two-day" | null,
-                    "condition": "new" | "used" | "refurbished" | null,
-                    "brand": string or null,
-                    "similarTo": string or null (for similar product descriptions),
-                    "attributes": {
-                      // Dynamic attributes based on product type
-                      // Examples:
-                      "color": string or null,
-                      "size": string or null,
-                      "material": string or null,
-                      "storage": string or null,
-                      "format": string or null,
-                      // Add any other relevant attributes
-                    },
-                    "excludeTerms": [string] (terms to exclude from results),
-                    "mustIncludeTerms": [string] (terms that must be in results)
-                  }
-                }
+  // Get conversation context
+  const context = state.conversationContext || [];
+  
+  // Create messages array with system prompt and conversation history
+  const messages = [{
+    role: 'system',
+    content: `You are a search query optimizer for Amazon products. Convert natural language queries into structured search terms and filters.
+              Analyze the query to understand product type and extract relevant attributes and filters.
+              Maintain context from previous queries to enhance the current search.
+              If a query seems to be refining a previous search, combine the contexts appropriately.
+              
+              You MUST ALWAYS respond with a complete JSON structure containing ALL fields, even if they are null.
 
-                Examples:
-                1. "Find me a waterproof phone case similar to OtterBox but cheaper"
-                2. "Show me cotton t-shirts in blue or navy, size large, under $30"
-                3. "I need a 1TB SSD hard drive with USB-C connection and at least 1000 reviews"
-                4. "Find me fantasy books like Lord of the Rings but in paperback with over 500 reviews"
-                5. "Show me hypoallergenic face moisturizer for sensitive skin with at least 2000 reviews"
-                6. "I want a coffee maker with a grinder and at least 100 positive reviews"
-                7. "Show me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
-                8. "Find me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
-                9. "Show me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"
-                10. "Find me 1TB SSD hard drives with USB-C connection and at least 1000 reviews"`
-    }, {
-      role: 'user',
-      content: userQuery
-    }]
-  };
+              Required JSON format:
+              {
+                "searchTerm": "optimized search keywords",
+                "productType": "category of product being searched",
+                "filters": {
+                  "minPrice": number | null,
+                  "maxPrice": number | null,
+                  "prime": boolean,
+                  "minRating": number | null,
+                  "minReviewCount": number | null,
+                  "freeShipping": boolean,
+                  "deliverySpeed": "next-day" | "two-day" | null,
+                  "condition": "new" | "used" | "refurbished" | null,
+                  "brand": string | null,
+                  "similarTo": string | null,
+                  "attributes": {
+                    "color": string | null,
+                    "size": string | null,
+                    "material": string | null,
+                    "storage": string | null,
+                    "format": string | null
+                  },
+                  "excludeTerms": string[],
+                  "mustIncludeTerms": string[]
+                }
+              }
+
+              Example response for "show me korean skincare":
+              {
+                "searchTerm": "korean skincare",
+                "productType": "beauty",
+                "filters": {
+                  "minPrice": null,
+                  "maxPrice": null,
+                  "prime": false,
+                  "minRating": null,
+                  "minReviewCount": null,
+                  "freeShipping": false,
+                  "deliverySpeed": null,
+                  "condition": null,
+                  "brand": null,
+                  "similarTo": null,
+                  "attributes": {
+                    "color": null,
+                    "size": null,
+                    "material": null,
+                    "storage": null,
+                    "format": null
+                  },
+                  "excludeTerms": [],
+                  "mustIncludeTerms": []
+                }
+              }
+
+              Consider these dynamic aspects for different product types:
+              - Electronics: storage capacity, screen size, processor, RAM, connectivity
+              - Clothing: size, color, material, style, fit, season
+              - Books: format (hardcover/paperback/kindle), language, genre
+              - Home goods: room type, dimensions, material, style
+              - Beauty: skin type, ingredients, concerns
+              - Food: dietary restrictions, ingredients, preparation`
+  }];
+
+  // Add conversation history to messages
+  context.forEach(entry => {
+    messages.push({ role: 'user', content: entry.query });
+    if (entry.response) {
+      messages.push({ role: 'assistant', content: JSON.stringify(entry.response) });
+    }
+  });
+
+  // Add current query
+  messages.push({ role: 'user', content: userQuery });
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -864,7 +892,7 @@ async function generateOptimizedQuery(userQuery) {
       },
       body: JSON.stringify({
         model: OPENAI_CONFIG.MODEL,
-        messages: prompt.messages,
+        messages: messages,
         max_tokens: OPENAI_CONFIG.MAX_TOKENS,
         temperature: OPENAI_CONFIG.TEMPERATURE
       })
@@ -875,16 +903,73 @@ async function generateOptimizedQuery(userQuery) {
     }
 
     const data = await response.json();
-    const result = JSON.parse(data.choices[0].message.content);
+    let result = JSON.parse(data.choices[0].message.content);
     
+    // Validate and ensure complete structure
+    const defaultStructure = {
+      searchTerm: "",
+      productType: "",
+      filters: {
+        minPrice: null,
+        maxPrice: null,
+        prime: false,
+        minRating: null,
+        minReviewCount: null,
+        freeShipping: false,
+        deliverySpeed: null,
+        condition: null,
+        brand: null,
+        similarTo: null,
+        attributes: {
+          color: null,
+          size: null,
+          material: null,
+          storage: null,
+          format: null
+        },
+        excludeTerms: [],
+        mustIncludeTerms: []
+      }
+    };
+
+    // Merge the response with default structure to ensure all fields exist
+    result = {
+      ...defaultStructure,
+      ...result,
+      filters: {
+        ...defaultStructure.filters,
+        ...result.filters,
+        attributes: {
+          ...defaultStructure.filters.attributes,
+          ...(result.filters?.attributes || {})
+        }
+      }
+    };
+
     console.log('Raw OpenAI Response:', data);
-    console.log('Parsed OpenAI Result:', result);
+    console.log('Validated Result:', result);
+    
+    // Update conversation context
+    context.push({
+      query: userQuery,
+      response: result,
+      timestamp: Date.now()
+    });
+
+    // Keep only last 5 exchanges to maintain reasonable context window
+    if (context.length > 5) {
+      context.shift();
+    }
+
+    // Save updated context
+    await setState({ conversationContext: context });
     
     // Enhance the search URL with additional filters
     const enhancedFilters = {
       ...result.filters,
       searchTerm: result.searchTerm
     };
+
     // Add product type specific terms to the search
     if (result.productType && result.filters.attributes) {
       const attributeTerms = Object.values(result.filters.attributes)
@@ -894,9 +979,9 @@ async function generateOptimizedQuery(userQuery) {
     }
 
     // Add must-include terms to the search
-    if (result.filters.mustIncludeTerms && result.filters.mustIncludeTerms.length > 0) {
-      enhancedFilters.searchTerm = `${enhancedFilters.searchTerm} ${result.filters.mustIncludeTerms.join(' ')}`;
-    }
+    // if (result.filters.mustIncludeTerms && result.filters.mustIncludeTerms.length > 0) {
+    //   enhancedFilters.searchTerm = `${enhancedFilters.searchTerm} ${result.filters.mustIncludeTerms.join(' ')}`;
+    // }
 
     return enhancedFilters;
   } catch (error) {
