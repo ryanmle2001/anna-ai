@@ -276,6 +276,12 @@ async function handleSearchProducts(request, sender, sendResponse) {
     const parsedQueryFilters = await generateOptimizedQuery(request.query);    
     console.log('Generated optimized query:', parsedQueryFilters);
 
+    if (!parsedQueryFilters) {
+      sendResponse({
+        error: 'Error generating optimized query, OpenAI request failed.'
+      });
+      return;
+    }
     const result = await handleProductSearch(parsedQueryFilters.searchTerm, parsedQueryFilters);
     
     if (!result.products || result.products.length === 0) {
@@ -309,123 +315,9 @@ async function handleSearchProducts(request, sender, sendResponse) {
   }, 25000);
 }
 
-// Parse natural language query into search terms and filters
-function parseNaturalLanguageQuery(query) {
-  const filters = {};
-  let searchTerm = query;
-
-  // Extract price range with more comprehensive patterns
-  const pricePatterns = [
-    { pattern: /under\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
-    { pattern: /less\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
-    { pattern: /cheaper\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'max' },
-    { pattern: /over\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
-    { pattern: /more\s+than\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
-    { pattern: /above\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'min' },
-    { pattern: /between\s*\$?\s*(\d+(?:\.\d{2})?)\s*(?:and|to|-)\s*\$?\s*(\d+(?:\.\d{2})?)/i, type: 'range' }
-  ];
-
-  // Try each price pattern
-  for (const { pattern, type } of pricePatterns) {
-    const match = searchTerm.match(pattern);
-    if (match) {
-      if (type === 'range') {
-        filters.minPrice = parseFloat(match[1]);
-        filters.maxPrice = parseFloat(match[2]);
-      } else if (type === 'min') {
-        filters.minPrice = parseFloat(match[1]);
-      } else if (type === 'max') {
-        filters.maxPrice = parseFloat(match[1]);
-      }
-      searchTerm = searchTerm.replace(match[0], '');
-      break;
-    }
-  }
-
-  // Extract review count requirements
-  const reviewCountPatterns = [
-    /(?:with|has|having)\s+(?:at\s+least\s+)?(\d[\d,]*)\s+reviews?/i,
-    /(\d[\d,]*)\+?\s+reviews?/i,
-    /more\s+than\s+(\d[\d,]*)\s+reviews?/i
-  ];
-
-  for (const pattern of reviewCountPatterns) {
-    const match = searchTerm.match(pattern);
-    if (match) {
-      filters.minReviewCount = parseInt(match[1].replace(/,/g, ''));
-      searchTerm = searchTerm.replace(match[0], '');
-      break;
-    }
-  }
-
-  // Extract Prime preference
-  if (/\b(?:with\s+)?prime(?:\s+shipping)?\b/i.test(searchTerm)) {
-    filters.prime = true;
-    searchTerm = searchTerm.replace(/\b(?:with\s+)?prime(?:\s+shipping)?\b/i, '');
-  }
-
-  // Extract rating preference
-  const rating = searchTerm.match(/(\d+(?:\.\d+)?)\+?\s*stars?/i);
-  if (rating) {
-    filters.minRating = parseFloat(rating[1]);
-    searchTerm = searchTerm.replace(rating[0], '');
-  }
-
-  // Extract shipping preferences
-  if (/\bfree shipping\b/i.test(searchTerm)) {
-    filters.freeShipping = true;
-    searchTerm = searchTerm.replace(/\bfree shipping\b/i, '');
-  }
-
-  // Extract delivery time preferences
-  const nextDay = /\b(?:next|one)\s*day\s*(?:delivery|shipping)\b/i;
-  const twoDay = /\btwo\s*day\s*(?:delivery|shipping)\b/i;
-  if (nextDay.test(searchTerm)) {
-    filters.deliverySpeed = 'next-day';
-    searchTerm = searchTerm.replace(nextDay, '');
-  } else if (twoDay.test(searchTerm)) {
-    filters.deliverySpeed = 'two-day';
-    searchTerm = searchTerm.replace(twoDay, '');
-  }
-
-  // Extract condition preferences
-  if (/\bnew\b/i.test(searchTerm)) {
-    filters.condition = 'new';
-    searchTerm = searchTerm.replace(/\bnew\b/i, '');
-  } else if (/\bused\b/i.test(searchTerm)) {
-    filters.condition = 'used';
-    searchTerm = searchTerm.replace(/\bused\b/i, '');
-  } else if (/\brefurbished\b/i.test(searchTerm)) {
-    filters.condition = 'refurbished';
-    searchTerm = searchTerm.replace(/\brefurbished\b/i, '');
-  }
-
-  // Extract brand preferences
-  const brandMatch = searchTerm.match(/\bby\s+([A-Za-z0-9\s]+?)(?:\s+(?:brand|company))?\b/i);
-  if (brandMatch) {
-    filters.brand = brandMatch[1].trim();
-    searchTerm = searchTerm.replace(brandMatch[0], '');
-  }
-
-  // Clean up search term - remove extra spaces and normalize
-  searchTerm = searchTerm
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-
-  // Remove duplicate words
-  const terms = new Set(searchTerm.split(' '));
-  searchTerm = Array.from(terms).join(' ');
-
-  return {
-    searchTerm,
-    filters
-  };
-}
 
 // Construct Amazon search URL with filters
 function constructSearchUrl(query, filters, isDirectSearch = false) {
-  console.log('Constructing URL with filters:', filters);
   const baseUrl = 'https://www.amazon.com/s';
   const params = new URLSearchParams();
 
@@ -516,22 +408,8 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
     }
   }
 
-  // Department/category filter
-  if (filters.productType) {
-    const searchIndex = getSearchIndex(filters.productType);
-    if (searchIndex) {
-      params.append('i', searchIndex);
-      // Some categories have specific refinement codes
-      const categoryRefinements = getCategoryRefinements(filters.productType);
-      if (categoryRefinements) {
-        refinements.push(categoryRefinements);
-      }
-    }
-  }
-
   // Combine all refinements with proper separator
   if (refinements.length > 0) {
-    console.log('Final refinements:', refinements);
     params.append('rh', refinements.join(','));
   }
 
@@ -554,9 +432,7 @@ function constructSearchUrl(query, filters, isDirectSearch = false) {
 
   // Construct the final URL
   const url = new URL(baseUrl);
-  console.log('Params:', params.toString());
   url.search = params.toString();
-  console.log('Final URL:', url.toString());
   return url.toString();
 }
 
@@ -595,30 +471,6 @@ function getSearchIndex(productType) {
   return typeMap[productType.toLowerCase()];
 }
 
-// Helper function to get size filter codes (simplified example)
-function getSizeFilter(size) {
-  // This would need to be expanded based on product category
-  const sizeMap = {
-    'small': '2475999011',
-    'medium': '2476000011',
-    'large': '2476001011',
-    'xl': '2476002011'
-  };
-  return sizeMap[size.toLowerCase()] || '';
-}
-
-// Helper function to get color filter codes (simplified example)
-function getColorFilter(color) {
-  // This would need to be expanded with actual Amazon color codes
-  const colorMap = {
-    'black': '2475992011',
-    'blue': '2475993011',
-    'red': '2475994011',
-    'white': '2475995011'
-  };
-  return colorMap[color.toLowerCase()] || '';
-}
-
 // Check if we're within rate limits
 async function checkRateLimit() {
   const state = await getState();
@@ -655,7 +507,6 @@ async function handleProductSearch(query, filters = {}, popupTab = null) {
   try {
     // Construct search URL with isDirectSearch=true to include all filters
     const searchUrl = constructSearchUrl(query, filters, true);
-    console.log("Constructed search URL:", searchUrl);
     // Create a hidden tab for scraping
     const searchTab = await chrome.tabs.create({ 
       url: searchUrl,
@@ -785,7 +636,7 @@ function scrapeSearchResults(filters) {
     // Check price against filters
     if (filters.minPrice && priceValue < filters.minPrice) return null;
     if (filters.maxPrice && priceValue > filters.maxPrice) return null;
-    
+
     return {
       formatted: `$${priceValue.toFixed(2)}`,
       value: priceValue
@@ -1050,8 +901,7 @@ async function generateOptimizedQuery(userQuery) {
     return enhancedFilters;
   } catch (error) {
     console.error('OpenAI API error:', error);
-    // Fallback to basic parsing if OpenAI fails
-    return parseNaturalLanguageQuery(userQuery);
+    return null;
   }
 }
 
