@@ -6,6 +6,14 @@
   flex-direction: column;
   gap: 16px;
   background: #ffffff;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.chat-container > div {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-container::-webkit-scrollbar {

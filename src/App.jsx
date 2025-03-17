@@ -3,14 +3,27 @@ import Header from './components/Header/Header';
 import ChatContainer from './components/ChatContainer/ChatContainer';
 import InputContainer from './components/InputContainer/InputContainer';
 import './App.css';
-import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isApiConfigured, setIsApiConfigured] = useState(false);
   const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    // Check for existing user data on mount
+    const userData = localStorage.getItem('user_data');
+    if (userData) {
+      try {
+        setUser(JSON.parse(userData));
+      } catch (error) {
+        console.error('Error parsing user data:', error);
+        // Clear invalid data
+        localStorage.removeItem('user_data');
+        localStorage.removeItem('google_token');
+      }
+    }
+  }, []);
 
   useEffect(() => {
     // Only proceed with chat initialization if user is logged in
@@ -46,16 +59,7 @@ function App() {
 
       checkStoredResults();
     }
-  }, [user]); // Add user as dependency
-
-  useEffect(() => {
-    // Check for existing Google auth session on mount
-    const token = localStorage.getItem('google_token');
-    if (token) {
-      const userData = jwtDecode(token);
-      setUser(userData);
-    }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -64,8 +68,13 @@ function App() {
   }, [messages]);
 
   const checkApiConfiguration = async () => {
+    if (!user?.id) return;
     try {
-      const response = await chrome.runtime.sendMessage({ action: 'checkApiConfig' });
+      const key = `apiKey_${user.id}`;
+      const response = await chrome.runtime.sendMessage({ 
+        action: 'checkApiConfig',
+        userId: user.id 
+      });
       setIsApiConfigured(response.openaiConfigured);
       
       if (!response.openaiConfigured) {
@@ -81,10 +90,12 @@ function App() {
   };
 
   const loadChatHistory = async () => {
+    if (!user?.id) return;
     try {
-      const data = await chrome.storage.local.get('chatHistory');
-      if (data.chatHistory) {
-        setMessages(data.chatHistory);
+      const key = `chatHistory_${user.id}`;
+      const data = await chrome.storage.local.get(key);
+      if (data[key]) {
+        setMessages(data[key]);
       }
     } catch (error) {
       console.error('Error loading chat history:', error);
@@ -92,15 +103,21 @@ function App() {
   };
 
   const saveChatHistory = async (newMessages) => {
+    if (!user?.id) return;
     try {
-      await chrome.storage.local.set({ chatHistory: newMessages });
+      const key = `chatHistory_${user.id}`;
+      await chrome.storage.local.set({ [key]: newMessages });
     } catch (error) {
       console.error('Error saving chat history:', error);
     }
   };
 
   const handleSettingsClick = () => {
-    chrome.runtime.openOptionsPage();
+    // Pass the user ID to the options page
+    chrome.runtime.openOptionsPage(() => {
+      // Store current user ID for options page to use
+      chrome.storage.local.set({ currentUserId: user.id });
+    });
   };
 
   const handleSendMessage = async (text) => {
@@ -184,66 +201,87 @@ function App() {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse) => {
-    try {
-      const details = jwtDecode(credentialResponse.credential);
-      
-      // Store user info
-      const userData = {
-        id: details.sub,
-        name: details.name,
-        email: details.email,
-        picture: details.picture
-      };
-      
-      // Store both the token and user data
-      localStorage.setItem('google_token', credentialResponse.credential);
-      localStorage.setItem('user_data', JSON.stringify(userData));
-      
-      setUser(userData);
-    } catch (error) {
-      console.error('Google login error:', error);
-    }
-  };
+  const handleGoogleLogin = () => {
+    chrome.identity.getAuthToken({ interactive: true }, function(token) {
+      if (chrome.runtime.lastError || !token) {
+        console.error('Google login failed:', chrome.runtime.lastError);
+        setMessages(prev => [...prev, {
+          type: 'error',
+          text: 'Google login failed. Please try again.',
+          timestamp: Date.now()
+        }]);
+        return;
+      }
 
-  const handleGoogleError = () => {
-    console.error('Google login failed');
-    // Optionally show error message to user
-    setMessages(prev => [...prev, {
-      type: 'error',
-      text: 'Google login failed. Please try again.',
-      timestamp: Date.now()
-    }]);
+      // Get user info using the token
+      fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(response => response.json())
+        .then(data => {
+          const userData = {
+            id: data.sub,
+            name: data.name,
+            email: data.email,
+            picture: data.picture
+          };
+          
+          // Store the token and user data separately
+          localStorage.setItem('google_token', token);
+          localStorage.setItem('user_data', JSON.stringify(userData));
+          
+          // Store the user ID in Chrome's storage and reload the popup
+          chrome.storage.local.set({ currentUserId: data.sub }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('Error storing user ID:', chrome.runtime.lastError);
+            } else {
+              console.log('Successfully stored user ID:', data.sub);
+              // Update the user state and reload the popup
+              setUser(userData);
+              window.location.reload();
+            }
+          });
+        })
+        .catch(error => {
+          console.error('Error fetching user info:', error);
+          setMessages(prev => [...prev, {
+            type: 'error',
+            text: 'Failed to get user information. Please try again.',
+            timestamp: Date.now()
+          }]);
+        });
+    });
   };
 
   return (
-    <GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID}>
-      <div className="app">
-        {!user ? (
-          <div className="login-container">
-            <h2>Welcome to Anna AI</h2>
-            <p>Please sign in to continue</p>
-            <GoogleLogin
-              onSuccess={handleGoogleSuccess}
-              onError={handleGoogleError}
-              useOneTap
-              theme="filled_blue"
-              size="large"
-              shape="pill"
-            />
-          </div>
-        ) : (
-          <>
-            <Header onSettingsClick={handleSettingsClick} user={user} />
-            <ChatContainer messages={messages} isTyping={isTyping} />
-            <InputContainer 
-              onSendMessage={handleSendMessage}
-              disabled={!isApiConfigured || isTyping}
-            />
-          </>
-        )}
-      </div>
-    </GoogleOAuthProvider>
+    <div className="app">
+      {!user ? (
+        <div className="login-container">
+          <img 
+            src="/icons/anna-ai-logo.png" 
+            alt="Anna AI Logo" 
+            className="login-logo"
+          />
+          <h2>Anna AI Shopping Assistant</h2>
+          <p>Sign in to start your personalized shopping experience</p>
+          <button 
+            className="google-login-button"
+            onClick={handleGoogleLogin}
+          >
+            Continue with Google
+          </button>
+        </div>
+      ) : (
+        <>
+          <Header onSettingsClick={handleSettingsClick} user={user} />
+          <ChatContainer messages={messages} isTyping={isTyping} />
+          <InputContainer 
+            onSendMessage={handleSendMessage}
+            disabled={!isApiConfigured || isTyping}
+          />
+        </>
+      )}
+    </div>
   );
 }
 

@@ -2,9 +2,7 @@
   max-width: 800px;
   margin: 0 auto;
   padding: 2rem;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  background-color: #fff;
-  min-height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 body {
@@ -14,142 +12,174 @@ body {
 
 h1 {
   color: #232f3e;
+  text-align: center;
   margin-bottom: 2rem;
-  font-size: 1.8rem;
-  border-bottom: 2px solid #ff9900;
-  padding-bottom: 0.5rem;
+  font-size: 2rem;
 }
 
 .form-group {
   margin-bottom: 1.5rem;
-  background: white;
+  background: #fff;
   padding: 1.5rem;
   border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-weight: 500;
-  color: #232f3e;
-}
-
-input[type="text"],
-input[type="number"] {
-  width: 100%;
-  padding: 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 1rem;
-  transition: border-color 0.2s;
-}
-
-input[type="text"]:focus,
-input[type="number"]:focus {
-  outline: none;
-  border-color: #ff9900;
-  box-shadow: 0 0 0 2px rgba(255,153,0,0.2);
-}
-
-input[type="checkbox"] {
-  margin-right: 0.5rem;
-  accent-color: #ff9900;
+.api-key-section {
+  background: #f8f9fa;
+  border: 1px solid #eee;
+  padding: 2rem;
+  border-radius: 8px;
 }
 
 .api-key-container {
   display: flex;
   gap: 1rem;
-  margin-bottom: 0.5rem;
+  align-items: center;
+  width: 100%;
+  margin: 1rem 0;
 }
 
 .api-key-container input {
   flex: 1;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+  color: #232f3e;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.api-key-container input:focus {
+  border-color: #ff9900;
+  box-shadow: 0 0 0 2px rgba(255, 153, 0, 0.2);
+  outline: none;
+}
+
+.api-key-container button {
+  padding: 0.75rem 1.5rem;
+  background-color: #232f3e;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.api-key-container button:hover {
+  background-color: #1a2532;
+  transform: translateY(-1px);
+}
+
+.api-key-container button:active {
+  transform: translateY(0);
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #232f3e;
+  font-weight: 500;
 }
 
 .help-text {
-  font-size: 0.9rem;
   color: #666;
+  font-size: 0.9rem;
   margin-top: 0.5rem;
+}
+
+input[type="number"] {
+  width: 100%;
+  max-width: 200px;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+input[type="checkbox"] {
+  margin-right: 0.5rem;
 }
 
 .buttons {
   display: flex;
   gap: 1rem;
+  justify-content: flex-end;
   margin-top: 2rem;
 }
 
-button {
+.buttons button {
   padding: 0.75rem 1.5rem;
-  border: none;
   border-radius: 4px;
-  font-size: 1rem;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-weight: 500;
 }
 
-button[type="submit"] {
+.buttons button[type="submit"] {
   background-color: #ff9900;
   color: #232f3e;
+  border: none;
 }
 
-button[type="submit"]:hover {
+.buttons button[type="submit"]:hover {
   background-color: #f08700;
   transform: translateY(-1px);
 }
 
-button.secondary {
-  background-color: #232f3e;
-  color: white;
+.buttons button.secondary {
+  background-color: #fff;
+  color: #232f3e;
+  border: 1px solid #ddd;
 }
 
-button.secondary:hover {
-  background-color: #1a2532;
+.buttons button.secondary:hover {
+  background-color: #f8f9fa;
+  border-color: #ccc;
   transform: translateY(-1px);
 }
 
 .status {
-  margin-top: 1rem;
-  padding: 1rem;
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  padding: 1rem 2rem;
   border-radius: 4px;
-  font-size: 0.9rem;
-  animation: fadeIn 0.3s ease;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  color: white;
+  animation: slideIn 0.3s ease;
 }
 
 .status.success {
-  background-color: #efffef;
-  color: #0d6832;
-  border: 1px solid #b7dfb9;
+  background-color: #00a762;
 }
 
 .status.error {
-  background-color: #fff2f2;
-  color: #c62828;
-  border: 1px solid #ffcdd2;
+  background-color: #dc3545;
 }
 
 .status.info {
-  background-color: #f0f7ff;
-  color: #0d47a1;
-  border: 1px solid #bbdefb;
+  background-color: #0066c0;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .guidelines {
-  margin-top: 2rem;
+  margin-top: 3rem;
   padding: 1.5rem;
-  background-color: #232f3e;
+  background: #f8f9fa;
   border-radius: 8px;
-  color: white;
-}
-
-.guidelines p strong {
-  color: #ff9900;
+  border: 1px solid #eee;
 }
 
 .guidelines ul {
@@ -158,7 +188,10 @@ button.secondary:hover {
 }
 
 .guidelines li {
-  margin-bottom: 0.75rem;
-  color: #f8f9fa;
-  line-height: 1.4;
+  margin-bottom: 0.5rem;
+  color: #444;
+}
+
+.guidelines strong {
+  color: #232f3e;
 } 

@@ -9,26 +9,36 @@ const Options = () => {
     requestDelay: 3
   });
   const [status, setStatus] = useState({ message: '', type: '' });
+  const [userId, setUserId] = useState(null);
 
   useEffect(() => {
-    // Load saved settings when component mounts
-    loadSettings();
+    // Get the current user ID and load settings
+    chrome.storage.local.get('currentUserId', (data) => {
+      if (data.currentUserId) {
+        setUserId(data.currentUserId);
+        console.log('Current user ID:', userId);
+        loadSettings(data.currentUserId);
+      } else {
+        showStatus('Please log in to the extension first', 'error');
+      }
+    });
   }, []);
 
-  const loadSettings = async () => {
+  const loadSettings = async (currentUserId) => {
     try {
+      // Load user-specific settings
       const result = await chrome.storage.local.get([
-        'openai_api_key',
-        'maxResults',
-        'skipSponsored',
-        'requestDelay'
+        `apiKey_${currentUserId}`,
+        `maxResults_${currentUserId}`,
+        `skipSponsored_${currentUserId}`,
+        `requestDelay_${currentUserId}`
       ]);
 
       setSettings({
-        openaiKey: result.openai_api_key || '',
-        maxResults: result.maxResults || 3,
-        skipSponsored: result.skipSponsored ?? true,
-        requestDelay: result.requestDelay || 3
+        openaiKey: result[`apiKey_${currentUserId}`] || '',
+        maxResults: result[`maxResults_${currentUserId}`] || 3,
+        skipSponsored: result[`skipSponsored_${currentUserId}`] ?? true,
+        requestDelay: result[`requestDelay_${currentUserId}`] || 3
       });
     } catch (error) {
       showStatus('Error loading settings: ' + error.message, 'error');
@@ -37,31 +47,59 @@ const Options = () => {
 
   const saveSettings = async (e) => {
     e.preventDefault();
+    if (!userId) {
+      showStatus('Please log in to save settings', 'error');
+      return;
+    }
+
     try {
+      // Save user-specific settings
       await chrome.storage.local.set({
-        openai_api_key: settings.openaiKey,
-        maxResults: settings.maxResults,
-        skipSponsored: settings.skipSponsored,
-        requestDelay: settings.requestDelay
+        [`apiKey_${userId}`]: settings.openaiKey,
+        [`maxResults_${userId}`]: settings.maxResults,
+        [`skipSponsored_${userId}`]: settings.skipSponsored,
+        [`requestDelay_${userId}`]: settings.requestDelay
       });
-      showStatus('Settings saved successfully!', 'success');
-      chrome.tabs.create({
-        url: 'https://www.amazon.com',
-        active: true // This makes the new tab active/focused
+
+      // Test the API key
+      const response = await chrome.runtime.sendMessage({
+        action: 'setApiKey',
+        apiKey: settings.openaiKey,
+        userId: userId
       });
+
+      if (response.success) {
+        showStatus('Settings saved successfully!', 'success');
+        chrome.tabs.create({
+          url: 'https://www.amazon.com',
+          active: true
+        });
+      } else {
+        showStatus('Error saving API key', 'error');
+      }
     } catch (error) {
       showStatus('Error saving settings: ' + error.message, 'error');
     }
   };
 
   const testConnection = async () => {
+    if (!userId) {
+      showStatus('Please log in to test connection', 'error');
+      return;
+    }
+
+    if (!settings.openaiKey) {
+      showStatus('Please enter an API key', 'error');
+      return;
+    }
+
     try {
       const response = await chrome.runtime.sendMessage({
-        action: 'checkApiConfig',
-        testKey: settings.openaiKey
+        action: 'testApiKey',
+        apiKey: settings.openaiKey
       });
 
-      if (response.openaiConfigured) {
+      if (response.isValid) {
         showStatus('API connection successful!', 'success');
       } else {
         showStatus('API connection failed: ' + (response.error || 'Invalid key'), 'error');
@@ -72,6 +110,11 @@ const Options = () => {
   };
 
   const resetSettings = async () => {
+    if (!userId) {
+      showStatus('Please log in to reset settings', 'error');
+      return;
+    }
+
     const defaultSettings = {
       openaiKey: '',
       maxResults: 3,
@@ -80,7 +123,13 @@ const Options = () => {
     };
 
     try {
-      await chrome.storage.local.clear();
+      // Remove user-specific settings
+      await chrome.storage.local.remove([
+        `apiKey_${userId}`,
+        `maxResults_${userId}`,
+        `skipSponsored_${userId}`,
+        `requestDelay_${userId}`
+      ]);
       setSettings(defaultSettings);
       showStatus('Settings reset to defaults', 'success');
     } catch (error) {
@@ -103,7 +152,7 @@ const Options = () => {
 
   return (
     <div className="container">
-      <h1>Anna AI Shopping Assistant Settings</h1>
+      <h1>Anna AI Settings</h1>
       
       <form onSubmit={saveSettings}>
         <div className="form-group api-key-section">

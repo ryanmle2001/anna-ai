@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cp public/{manifest.json,content.js,background.js} dist/ && mkdir -p dist/icons && cp public/icons/* dist/icons/",
+    "build": "vite build && node scripts/process-manifest.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -20,6 +20,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "dotenv": "^16.4.7",
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",

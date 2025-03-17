@@ -41,8 +41,11 @@
     "resources": ["index.html"],
     "matches": ["https://*.amazon.com/*"]
   }],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+  "externally_connectable": {
+    "matches": [
+      "https://accounts.google.com/*",
+      "https://*.googleapis.com/*"
+    ]
   },
   "options_page": "options.html",
   "icons": {
