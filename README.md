@@ -6,10 +6,8 @@ ANNA AI is a Chrome extension that enhances your Amazon shopping experience with
 
 - 🤖 AI-powered Amazon shopping assistant
 - 💬 Natural conversation interface
-- 📊 Price and feature evaluation
 - 🎯 Personalized product recommendations
 - 🔐 Secure Google authentication
-- ⚡ Real-time product analysis
 - 💾 Persistent chat history
 - 🎨 Clean, modern UI
 
@@ -26,9 +24,8 @@ ANNA AI is a Chrome extension that enhances your Amazon shopping experience with
 - React 18
 - Vite
 - Chrome Extensions Manifest V3
-- Google OAuth 2.0
+- Google Identity API
 - OpenAI API
-- JWT for authentication
 
 ## Installation
 
